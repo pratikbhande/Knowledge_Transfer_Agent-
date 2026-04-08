@@ -1,0 +1,28 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: cosmobase_backend
+    ports:
+      - "8010:8000"
+    volumes:
+      - ./backend:/app
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATA_DIR=/app/data
+    restart: on-failure
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cosmobase_frontend
+    ports:
+      - "8080:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+    restart: on-failure
