@@ -1,0 +1,47 @@
+# --- Python Backend ---
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+bin/
+lib/
+
+# Django / Flask / FastAPI sensitive files
+.env
+db.sqlite3
+*.log
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# --- JavaScript / Node.js Frontend ---
+# Dependencies
+node_modules/
+
+# Production build outputs (React, Vue, Next.js, etc.)
+build/
+dist/
+.next/
+out/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- System & IDE Files ---
+.DS_Store
+.vscode/
+.idea/
+
+.env
+
+chroma_db/

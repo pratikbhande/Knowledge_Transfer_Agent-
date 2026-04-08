@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cosmobase — Repository Knowledge Tree</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <canvas id="starfield"></canvas>
+  <div class="nebula nebula-a"></div>
+  <div class="nebula nebula-b"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span class="brand-name">COSMOBASE</span>
+      <span class="brand-tag">Repository Knowledge Tree</span>
+    </div>
+    <div class="ingest">
+      <input type="text" id="repoUrl" placeholder="https://github.com/owner/repo" autocomplete="off" />
+      <label class="private-toggle">
+        <input type="checkbox" id="isPrivate" /> <span>Private</span>
+      </label>
+      <input type="password" id="githubToken" placeholder="GitHub token" class="token-input hidden" autocomplete="off" />
+      <button id="ingestBtn" class="primary-btn">Ingest</button>
+    </div>
+  </header>
+
+  <div id="authBanner" class="auth-banner hidden">
+    This repository requires authentication. Enable <strong>Private</strong> and provide a GitHub token.
+  </div>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <div class="panel">
+        <div class="panel-header"><h3>Missions</h3></div>
+        <div id="missionList" class="mission-list"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><h3>Ingestion</h3></div>
+        <div id="phasePanel" class="phase-panel">
+          <p class="dim">No mission selected.</p>
+        </div>
+        <div id="logStream" class="log-stream"></div>
+      </div>
+    </aside>
+
+    <section class="center">
+      <div class="tabs">
+        <button class="tab active" data-tab="graph">Graph</button>
+        <button class="tab" data-tab="report">KT Report</button>
+        <button class="tab" data-tab="chat">Chat</button>
+        <div class="tab-spacer"></div>
+        <div class="graph-controls hidden" id="graphControls">
+          <button class="ghost-btn" id="graphModeBtn" data-mode="commit">Commit DAG</button>
+          <button class="ghost-btn" id="graphResetBtn">Reset view</button>
+        </div>
+      </div>
+
+      <div class="tab-panel active" id="tab-graph">
+        <svg id="graph" class="graph"></svg>
+        <div id="graphEmpty" class="empty">Select or start a mission to see the graph.</div>
+      </div>
+
+      <div class="tab-panel" id="tab-report">
+        <div id="reportContent" class="report">
+          <p class="empty">The KT report appears here once ingestion completes.</p>
+        </div>
+      </div>
+
+      <div class="tab-panel" id="tab-chat">
+        <div id="chatMessages" class="chat-messages">
+          <div class="chat-hint">Ask about the repository. Answers cite commits, files, and branches.</div>
+        </div>
+        <div class="chat-input-row">
+          <input type="text" id="chatInput" placeholder="Ask about this repo…" />
+          <button id="chatSendBtn" class="primary-btn">Send</button>
+        </div>
+      </div>
+    </section>
+
+    <aside class="details" id="detailsPanel">
+      <div class="panel">
+        <div class="panel-header"><h3>Details</h3></div>
+        <div id="detailsBody" class="details-body">
+          <p class="dim">Click a commit node to inspect it.</p>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <script src="starfield.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
