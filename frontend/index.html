@@ -58,6 +58,13 @@
           <button class="ghost-btn" id="graphModeBtn" data-mode="commit">Commit DAG</button>
           <button class="ghost-btn" id="graphResetBtn">Reset view</button>
         </div>
+        <div class="graph-filter hidden" id="graphFilter">
+          <span class="filter-label">Show:</span>
+          <label class="filter-check"><input type="checkbox" id="filterTheme" checked> <span class="filter-dot" style="background:#9b59b6"></span>Themes</label>
+          <label class="filter-check"><input type="checkbox" id="filterFile" checked> <span class="filter-dot" style="background:#3498db"></span>Files</label>
+          <label class="filter-check"><input type="checkbox" id="filterFn" checked> <span class="filter-dot" style="background:#1abc9c"></span>Functions</label>
+          <input type="text" id="graphSearch" placeholder="Search nodes…" class="graph-search-input" />
+        </div>
       </div>
 
       <div class="tab-panel active" id="tab-graph">

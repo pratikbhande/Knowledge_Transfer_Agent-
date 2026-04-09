@@ -17,16 +17,16 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
 
     # Ingestion thresholds
-    summarize_batch_size: int = 8
-    key_commit_file_threshold: int = 8
-    key_commit_line_threshold: int = 300
-    narrative_sampling_stride: int = 25
+    summarize_batch_size: int = 12  # increased from 8 → fewer LLM calls for commit summarization
+    key_commit_file_threshold: int = 1
+    key_commit_line_threshold: int = 10
+    narrative_sampling_stride: int = 1
     max_diff_bytes: int = 4000
     max_hunk_chars: int = 400
 
     # Retrieval
-    chat_top_k: int = 8
-    chat_diff_attach: int = 2
+    chat_top_k: int = 15
+    chat_diff_attach: int = 4
 
     class Config:
         env_file = ".env"

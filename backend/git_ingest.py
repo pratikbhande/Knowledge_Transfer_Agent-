@@ -158,7 +158,7 @@ def list_branches(path: str, default: str) -> list[dict]:
 
 def walk_dag(path: str) -> Iterator[dict]:
     """Yield commits across all branches, oldest-first, with file stats."""
-    fmt = f"%H{NUL}%P{NUL}%an{NUL}%ae{NUL}%aI{NUL}%s{NUL}%b{RS}"
+    fmt = f"%H%x00%P%x00%an%x00%ae%x00%aI%x00%s%x00%b{RS}"
     cmd = [
         "git",
         "-C",
@@ -239,6 +239,58 @@ def read_diff(path: str, sha: str, max_bytes: int | None = None) -> str:
     if len(text) <= cap:
         return text
     return text[:cap] + f"\n... (diff truncated, {len(text) - cap} bytes omitted)"
+
+
+_SKIP_DIRS = {
+    ".git", "node_modules", "__pycache__", "vendor", ".venv", "venv",
+    "dist", "build", ".next", ".nuxt", "target", ".tox", "coverage",
+    ".mypy_cache", ".pytest_cache", "eggs", ".eggs",
+}
+
+_SOURCE_EXTS = {
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".java", ".rs",
+    ".rb", ".php", ".cs", ".cpp", ".c", ".h", ".hpp", ".swift",
+    ".kt", ".scala", ".ex", ".exs",
+}
+
+
+def list_repo_files(path: str) -> list[str]:
+    """Return all source file paths (relative to repo root) via git ls-tree. No checkout needed."""
+    r = _run(["git", "-C", path, "ls-tree", "-r", "--name-only", "HEAD"])
+    if r.returncode != 0:
+        return []
+    out: list[str] = []
+    for line in (r.stdout or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("/")
+        if any(p in _SKIP_DIRS for p in parts):
+            continue
+        ext = os.path.splitext(line)[1].lower()
+        if ext in _SOURCE_EXTS:
+            out.append(line)
+    return out
+
+
+def read_file_at_head(path: str, file_path: str) -> str:
+    """Read file content at HEAD without a working tree checkout (uses git show)."""
+    r = _run(["git", "-C", path, "show", f"HEAD:{file_path}"])
+    if r.returncode != 0:
+        return ""
+    return r.stdout or ""
+
+
+def find_introducing_commit(path: str, file_path: str, symbol_name: str) -> str | None:
+    """Use git-log pickaxe (-S) to find the oldest commit that added symbol_name in file_path."""
+    r = _run(
+        ["git", "-C", path, "log", "--follow", "--format=%H", "-S", symbol_name, "--", file_path],
+        timeout=30,
+    )
+    if r.returncode != 0 or not (r.stdout or "").strip():
+        return None
+    lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+    return lines[-1] if lines else None  # oldest = last in reverse-chronological output
 
 
 def delete_clone(mission_id: str) -> None:

@@ -7,7 +7,7 @@ import db
 from config import CHROMA_DIR
 
 
-_client: chromadb.PersistentClient | None = None
+_client = None
 
 
 def _get_client() -> chromadb.PersistentClient:
@@ -116,11 +116,42 @@ def index_files(mission_id: str) -> int:
     return len(ids)
 
 
+def index_entities(mission_id: str) -> int:
+    entities = db.list_code_entities(mission_id, limit=2000)
+    # Only index named code entities (not raw file stubs)
+    entities = [e for e in entities if e["kind"] in ("function", "class", "method")]
+    if not entities:
+        return 0
+    ids: list[str] = []
+    docs: list[str] = []
+    metas: list[dict] = []
+    for e in entities:
+        ids.append(e["id"])
+        doc_parts = [
+            e.get("name") or "",
+            e.get("signature") or "",
+            e.get("docstring") or "",
+            e.get("llm_summary") or "",
+            e.get("llm_why") or "",
+        ]
+        docs.append("\n".join(p for p in doc_parts if p))
+        metas.append({
+            "kind": e["kind"],
+            "path": e["path"],
+            "line_start": int(e.get("line_start") or 0),
+        })
+    _reset_collection(mission_id, "entities")
+    col = _col(mission_id, "entities")
+    col.upsert(ids=ids, documents=docs, metadatas=metas, embeddings=_embed(docs))
+    return len(ids)
+
+
 def build_indexes(mission_id: str) -> dict:
     return {
         "commits": index_commits(mission_id),
         "clusters": index_clusters(mission_id),
         "files": index_files(mission_id),
+        "entities": index_entities(mission_id),
     }
 
 
@@ -155,5 +186,6 @@ def search(mission_id: str, query: str, k: int = 8) -> list[dict]:
     hits += _safe_query(mission_id, "commits", query_emb, k)
     hits += _safe_query(mission_id, "clusters", query_emb, max(2, k // 2))
     hits += _safe_query(mission_id, "files", query_emb, max(2, k // 2))
+    hits += _safe_query(mission_id, "entities", query_emb, max(4, k // 2))
     hits.sort(key=lambda h: (h.get("distance") if h.get("distance") is not None else 1.0))
     return hits[:k]
