@@ -1,8 +1,13 @@
+import logging
 import traceback
 import uuid
 from urllib.parse import urlparse
 
+log = logging.getLogger("cosmobase.pipeline")
+
 import clusterer
+import code_analyzer
+import code_parser
 import db
 import embed
 import git_ingest
@@ -13,11 +18,17 @@ from git_ingest import RepoAuthError, repo_path
 from llm import LLMClient
 
 
-PHASES = ["clone", "walk", "classify", "select", "summarize", "cluster", "report", "index", "done"]
+PHASES = [
+    "clone", "walk", "classify", "select", "summarize",
+    "cluster", "report", "index", "code_parse", "code_analyze", "done",
+]
 
 
 def _log(mission_id: str, level: str, phase: str, msg: str) -> None:
     db.log_event(mission_id, level, phase, msg)
+    getattr(log, "warning" if level == "error" else level if hasattr(log, level) else "info")(
+        "[%s][%s] %s", mission_id, phase, msg
+    )
 
 
 def _is_private_hint(url: str) -> bool:
@@ -135,13 +146,115 @@ def run_mission(mission_id: str, github_token: str | None = None) -> None:
             db.set_phase(mission_id, "report", 100)
             _log(mission_id, "success", "report", "KT report complete")
 
-        # ---- Phase 8: vector indexes ----
+        # ---- Phase 8: initial vector indexes ----
         if not _phase_done(mission_id, "index"):
             db.set_phase(mission_id, "index", 30)
             _log(mission_id, "info", "index", "Building retrieval indexes")
             counts = embed.build_indexes(mission_id)
             db.set_phase(mission_id, "index", 100)
             _log(mission_id, "success", "index", f"Indexed {counts}")
+
+        # ---- Phase 9: parse source code entities (zero LLM calls) ----
+        if not _phase_done(mission_id, "code_parse"):
+            db.set_phase(mission_id, "code_parse", 10)
+            _log(mission_id, "info", "code_parse", "Parsing source code entities")
+            repo_info = db.get_repo(mission_id)
+            clone_path_local = repo_info["clone_path"]
+            files = git_ingest.list_repo_files(clone_path_local)
+            all_entities: list[dict] = []
+            all_edges: list[dict] = []
+            file_entities: list[dict] = []
+
+            # Get hot file paths for pickaxe priority
+            hot = db.file_touch_counts(mission_id, min_touches=2, limit=20)
+            hot_paths = {t["path"] for t in hot}
+
+            for file_path in files:
+                content = git_ingest.read_file_at_head(clone_path_local, file_path)
+                if not content:
+                    continue
+
+                file_id = f"file:{file_path}"
+                file_entities.append({
+                    "id": file_id,
+                    "kind": "file",
+                    "name": file_path.split("/")[-1],
+                    "path": file_path,
+                    "signature": None,
+                    "docstring": None,
+                    "code_snippet": content[:200],
+                    "llm_summary": None,
+                    "llm_why": None,
+                    "introduced_sha": None,
+                    "line_start": 1,
+                    "line_end": content.count("\n") + 1,
+                })
+
+                raw = code_parser.extract_entities(file_path, content)
+                for e in raw:
+                    kind_prefix = "cls" if e["kind"] == "class" else "fn"
+                    e["id"] = f"{kind_prefix}:{file_path}::{e['name']}"
+                    # Only run expensive pickaxe on top-20 hot files
+                    if file_path in hot_paths:
+                        try:
+                            sha = git_ingest.find_introducing_commit(
+                                clone_path_local, file_path, e["name"]
+                            )
+                            e["introduced_sha"] = sha
+                        except Exception:
+                            e["introduced_sha"] = None
+                    else:
+                        e["introduced_sha"] = None
+                    all_entities.append(e)
+                    all_edges.append({
+                        "src_id": file_id,
+                        "dst_id": e["id"],
+                        "edge_type": "contains",
+                    })
+
+                # Import edges
+                for imp in code_parser.extract_imports(file_path, content):
+                    imp_clean = imp.strip("/").replace("-", "_").split(".")[0]
+                    for other in files:
+                        other_name = other.split("/")[-1].split(".")[0].replace("-", "_")
+                        if other_name == imp_clean:
+                            all_edges.append({
+                                "src_id": file_id,
+                                "dst_id": f"file:{other}",
+                                "edge_type": "imports",
+                            })
+                            break
+
+            # introduced_by edges for entities with a known sha
+            for e in all_entities:
+                if e.get("introduced_sha"):
+                    all_edges.append({
+                        "src_id": e["id"],
+                        "dst_id": e["introduced_sha"],
+                        "edge_type": "introduced_by",
+                    })
+
+            db.insert_code_entities(mission_id, file_entities + all_entities)
+            db.insert_entity_edges(mission_id, all_edges)
+            db.set_phase(mission_id, "code_parse", 100)
+            _log(
+                mission_id, "success", "code_parse",
+                f"Parsed {len(all_entities)} entities, {len(all_edges)} edges from {len(files)} files"
+            )
+
+        # ---- Phase 10: LLM code analysis (2 LLM calls for 10 files) ----
+        if not _phase_done(mission_id, "code_analyze"):
+            db.set_phase(mission_id, "code_analyze", 10)
+            _log(mission_id, "info", "code_analyze", "Running LLM analysis on hot files (batched)")
+            n = code_analyzer.run_code_analysis(mission_id, llm)
+            db.set_phase(mission_id, "code_analyze", 100)
+            _log(mission_id, "success", "code_analyze", f"LLM analyzed {n} files")
+
+            # Rebuild vector indexes to include enriched entity data
+            db.set_phase(mission_id, "index", 30)
+            counts = embed.build_indexes(mission_id)
+            db.set_phase(mission_id, "index", 100)
+            _log(mission_id, "success", "index", f"Re-indexed with entities: {counts}")
 
         db.set_phase(mission_id, "done", 100)
         _log(mission_id, "success", "done", "Mission complete")
@@ -152,7 +265,7 @@ def run_mission(mission_id: str, github_token: str | None = None) -> None:
         raise
     except Exception as e:
         tb = traceback.format_exc()
-        print(tb)
+        log.error("[%s] pipeline error:\n%s", mission_id, tb)
         phases = db.get_phases(mission_id)
         current = next((p for p in reversed(PHASES) if p in phases), "unknown")
         db.set_phase(mission_id, current, phases.get(current, {}).get("progress", 0) or 0, error=str(e))

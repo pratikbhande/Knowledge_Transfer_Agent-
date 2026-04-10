@@ -99,6 +99,34 @@ CREATE TABLE IF NOT EXISTS events (
   phase TEXT NOT NULL,
   message TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS code_entities (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  path TEXT NOT NULL,
+  signature TEXT,
+  docstring TEXT,
+  code_snippet TEXT,
+  llm_summary TEXT,
+  llm_why TEXT,
+  introduced_sha TEXT,
+  line_start INTEGER,
+  line_end INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_entities_path ON code_entities(path);
+CREATE INDEX IF NOT EXISTS idx_entities_kind ON code_entities(kind);
+
+CREATE TABLE IF NOT EXISTS entity_edges (
+  src_id TEXT NOT NULL,
+  dst_id TEXT NOT NULL,
+  edge_type TEXT NOT NULL,
+  PRIMARY KEY (src_id, dst_id, edge_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_edges_src ON entity_edges(src_id);
+CREATE INDEX IF NOT EXISTS idx_edges_dst ON entity_edges(dst_id);
 """
 
 
@@ -116,6 +144,8 @@ def open_db(mission_id: str) -> Iterator[sqlite3.Connection]:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    # Always apply schema so new tables are available even on old missions
+    conn.executescript(SCHEMA)
     try:
         yield conn
         conn.commit()
@@ -475,6 +505,92 @@ def file_touch_counts(mission_id: str, min_touches: int = 2, limit: int = 200) -
             (min_touches, limit),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def insert_code_entities(mission_id: str, entities: list[dict]) -> None:
+    rows = [
+        (
+            e["id"], e["kind"], e["name"], e["path"],
+            e.get("signature"), e.get("docstring"), e.get("code_snippet"),
+            e.get("llm_summary"), e.get("llm_why"),
+            e.get("introduced_sha"), e.get("line_start"), e.get("line_end"),
+        )
+        for e in entities
+    ]
+    with open_db(mission_id) as conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO code_entities"
+            "(id, kind, name, path, signature, docstring, code_snippet,"
+            " llm_summary, llm_why, introduced_sha, line_start, line_end)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            rows,
+        )
+
+
+def insert_entity_edges(mission_id: str, edges: list[dict]) -> None:
+    rows = [(e["src_id"], e["dst_id"], e["edge_type"]) for e in edges]
+    with open_db(mission_id) as conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO entity_edges(src_id, dst_id, edge_type) VALUES(?,?,?)",
+            rows,
+        )
+
+
+def list_code_entities(
+    mission_id: str,
+    kind: str | None = None,
+    path: str | None = None,
+    limit: int = 500,
+) -> list[dict]:
+    q = "SELECT * FROM code_entities WHERE 1=1"
+    args: list = []
+    if kind:
+        q += " AND kind=?"
+        args.append(kind)
+    if path:
+        q += " AND path=?"
+        args.append(path)
+    q += f" LIMIT {int(limit)}"
+    with open_db(mission_id) as conn:
+        return [dict(r) for r in conn.execute(q, args).fetchall()]
+
+
+def get_code_entity(mission_id: str, entity_id: str) -> dict | None:
+    with open_db(mission_id) as conn:
+        row = conn.execute(
+            "SELECT * FROM code_entities WHERE id=?", (entity_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_entity_edges(mission_id: str, entity_id: str) -> list[dict]:
+    with open_db(mission_id) as conn:
+        rows = conn.execute(
+            "SELECT * FROM entity_edges WHERE src_id=? OR dst_id=?",
+            (entity_id, entity_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_entity_llm(mission_id: str, entity_id: str, llm_summary: str, llm_why: str) -> None:
+    with open_db(mission_id) as conn:
+        conn.execute(
+            "UPDATE code_entities SET llm_summary=?, llm_why=? WHERE id=?",
+            (llm_summary, llm_why, entity_id),
+        )
+
+
+def get_all_entity_edges(mission_id: str, limit: int = 3000) -> list[dict]:
+    with open_db(mission_id) as conn:
+        rows = conn.execute(
+            f"SELECT * FROM entity_edges LIMIT {int(limit)}"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def count_code_entities(mission_id: str) -> int:
+    with open_db(mission_id) as conn:
+        return conn.execute("SELECT COUNT(*) FROM code_entities").fetchone()[0]
 
 
 def top_commits_for_file(mission_id: str, path: str, limit: int = 5) -> list[dict]:

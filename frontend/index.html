@@ -6,6 +6,7 @@
   <title>Cosmobase — Repository Knowledge Tree</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -57,6 +58,13 @@
         <div class="graph-controls hidden" id="graphControls">
           <button class="ghost-btn" id="graphModeBtn" data-mode="commit">Commit DAG</button>
           <button class="ghost-btn" id="graphResetBtn">Reset view</button>
+        </div>
+        <div class="graph-filter hidden" id="graphFilter">
+          <span class="filter-label">Show:</span>
+          <label class="filter-check"><input type="checkbox" id="filterTheme" checked> <span class="filter-dot" style="background:#9b59b6"></span>Themes</label>
+          <label class="filter-check"><input type="checkbox" id="filterFile" checked> <span class="filter-dot" style="background:#3498db"></span>Files</label>
+          <label class="filter-check"><input type="checkbox" id="filterFn" checked> <span class="filter-dot" style="background:#1abc9c"></span>Functions</label>
+          <input type="text" id="graphSearch" placeholder="Search nodes…" class="graph-search-input" />
         </div>
       </div>
 

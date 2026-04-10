@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from typing import Iterator
 
@@ -6,6 +7,8 @@ import anthropic
 import openai
 
 from config import settings
+
+log = logging.getLogger("cosmobase.llm")
 
 
 class LLMUnavailable(RuntimeError):
@@ -84,6 +87,89 @@ class LLMClient:
             )
         return clean
 
+    def analyze_files_batch(self, files: list[dict]) -> list[dict]:
+        """
+        Analyze up to 5 source files in ONE LLM call (cost-efficient).
+        files: [{path, content, recent_commits}]
+        Returns: [{path, summary, why, key_functions:[{name,purpose,why}]}]
+        """
+        if not files:
+            return []
+        parts: list[str] = []
+        for i, f in enumerate(files[:5], 1):
+            commits_ctx = "\n".join(f"  - {t}" for t in (f.get("recent_commits") or [])[:5])
+            content_preview = (f.get("content") or "")[:1500]
+            parts.append(
+                f"=== FILE {i}: {f['path']} ===\n"
+                f"Recent commits:\n{commits_ctx or '  (none)'}\n"
+                f"Content:\n```\n{content_preview}\n```"
+            )
+        user = "\n\n".join(parts)
+        data = self._json_call(
+            system=_ANALYZE_FILES_BATCH_SYSTEM,
+            user=user,
+            max_tokens=2000,
+        )
+        results: list[dict] = []
+        for item in (data.get("files") or []):
+            if not isinstance(item, dict) or not item.get("path"):
+                continue
+            key_fns: list[dict] = []
+            for fn in (item.get("key_functions") or []):
+                if isinstance(fn, dict) and fn.get("name"):
+                    key_fns.append({
+                        "name": str(fn["name"])[:60],
+                        "purpose": _clip(str(fn.get("purpose") or ""), 160),
+                        "why": _clip(str(fn.get("why") or ""), 120),
+                    })
+            results.append({
+                "path": item["path"],
+                "summary": _clip(str(item.get("summary") or ""), 400),
+                "why": _clip(str(item.get("why") or ""), 300),
+                "key_functions": key_fns,
+            })
+        return results
+
+    def write_sections_batch(self, sections: list[tuple[str, str]], context: str) -> list[dict]:
+        """
+        Write multiple KT report sections in ONE LLM call (cost-efficient).
+        sections: [(section_key, instruction), ...]
+        Returns: [{section, content, refs}]
+        """
+        if not sections:
+            return []
+        sections_prompt = "\n".join(
+            f'  "{key}": "{instruction}"'
+            for key, instruction in sections
+        )
+        prompt = (
+            f"Write these {len(sections)} KT report sections.\n"
+            f"SECTIONS:\n{{{sections_prompt}}}\n\n"
+            "For each section use inline tags [sha:HASH], [branch:NAME], [file:PATH] where relevant.\n"
+            f"REPO STATE:\n{context}\n"
+        )
+        data = self._json_call(
+            system=_REPORT_BATCH_SYSTEM,
+            user=prompt,
+            max_tokens=4000,
+        )
+        results: list[dict] = []
+        sections_data = data.get("sections") or {}
+        for key, _ in sections:
+            content_val = ""
+            refs_val: list[dict] = []
+            if isinstance(sections_data, dict):
+                sec = sections_data.get(key) or {}
+                if isinstance(sec, dict):
+                    content_val = str(sec.get("content") or "")
+                    raw_refs = sec.get("refs") or []
+                    if isinstance(raw_refs, list):
+                        for r in raw_refs:
+                            if isinstance(r, dict):
+                                refs_val.append({k: v for k, v in r.items() if k in ("sha", "branch", "file")})
+            results.append({"section": key, "content": content_val, "refs": refs_val})
+        return results
+
     def write_section(self, section: str, context: str) -> dict:
         prompt = (
             f"SECTION: {section}\n"
@@ -120,7 +206,7 @@ class LLMClient:
                         yield text
                 return
             except Exception as e:
-                print(f"[llm] anthropic stream error: {e}")
+                log.warning("anthropic stream error: %s", e)
         if self.oai:
             try:
                 oai_msgs = [{"role": "system", "content": system}] + messages
@@ -135,7 +221,7 @@ class LLMClient:
                         yield delta
                 return
             except Exception as e:
-                print(f"[llm] openai stream error: {e}")
+                log.warning("openai stream error: %s", e)
         yield "(LLM unavailable: no API key configured.)"
 
     # ---------- internal ----------
@@ -152,7 +238,7 @@ class LLMClient:
                 )
                 return _parse_json(resp.content[0].text)
             except Exception as e:
-                print(f"[llm] anthropic json error: {e}")
+                log.warning("anthropic json error: %s", e)
         if self.oai:
             try:
                 resp = self.oai.chat.completions.create(
@@ -166,7 +252,7 @@ class LLMClient:
                 )
                 return _parse_json(resp.choices[0].message.content or "")
             except Exception as e:
-                print(f"[llm] openai json error: {e}")
+                log.warning("openai json error: %s", e)
         raise LLMUnavailable("no LLM backend available")
 
 
@@ -180,16 +266,43 @@ _SUMMARIZE_SYSTEM = (
 )
 
 _CLUSTER_SYSTEM = (
-    "You cluster commit summaries into higher-level knowledge nodes describing the evolution "
-    "of a codebase. Output JSON: {\"nodes\":[{id,kind,title,summary,member_shas}]}. "
-    "kind in {theme, module, refactor, architecture}. Prefer 6-14 nodes. Each node's "
+    "You are building a Knowledge Tree for developer onboarding. "
+    "Group commit summaries into hierarchical knowledge nodes that explain WHY features exist and how they evolved. "
+    "Each node should answer: What is this? Why was it built? How does it fit in the architecture? "
+    "Output JSON: {\"nodes\":[{id,kind,title,summary,member_shas}]}. "
+    "kind in {theme, module, refactor, architecture, feature, bugfix}. "
+    "Create as many nodes as needed to cover every aspect of the codebase. Each node's "
+    "summary should be 2-4 sentences explaining the purpose and architectural reasoning. "
     "member_shas must reference real input shas."
 )
 
 _REPORT_SYSTEM = (
-    "You write a concise section of a repository knowledge-transfer report. "
+    "You write a detailed Knowledge Transfer report section for onboarding new developers. "
+    "Explain which files do what, how the code flows end-to-end, and WHY architectural decisions were made. "
     "Output JSON: {\"content\":\"...\",\"refs\":[{\"sha\":\"...\"} or {\"branch\":\"...\"} or {\"file\":\"...\"}]}. "
-    "Ground claims with inline [sha:HASH], [branch:NAME], [file:PATH] tags. Keep prose tight."
+    "Ground claims with inline [sha:HASH], [branch:NAME], [file:PATH] tags. "
+    "Be thorough and provide actionable insights for new team members."
+)
+
+
+_ANALYZE_FILES_BATCH_SYSTEM = (
+    "You are an expert software engineer writing a Knowledge Transfer report. "
+    "You will receive 1-5 source files. Analyze ALL of them. "
+    "Output JSON: {\"files\": [{\"path\": \"...\", \"summary\": \"...\", \"why\": \"...\", "
+    "\"key_functions\": [{\"name\": \"...\", \"purpose\": \"...\", \"why\": \"...\"}]}]}. "
+    "For each file: summary = 2-3 sentences on what it does; why = 1-2 sentences on why it exists. "
+    "key_functions = the 3-5 most important functions/classes with exact name, purpose (1 sentence), why (1 sentence). "
+    "Use exact names from the code. Be specific and technical."
+)
+
+_REPORT_BATCH_SYSTEM = (
+    "You write a detailed Knowledge Transfer report for onboarding new developers. "
+    "You will receive multiple section instructions at once. Write ALL sections. "
+    "Output JSON: {\"sections\": {\"<section_key>\": {\"content\": \"...\", \"refs\": []}, ...}}. "
+    "For each section: content should be 3-6 paragraphs or bullet lists; "
+    "refs is a list of {sha:...}, {branch:...}, or {file:...} objects cited in the content. "
+    "Use inline tags [sha:HASH], [branch:NAME], [file:PATH] in the content text. "
+    "Be thorough, technical, and actionable for a new team member."
 )
 
 

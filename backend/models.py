@@ -82,8 +82,41 @@ class KnowledgeNode(BaseModel):
     last_date: str | None = None
 
 
+class EntityEdge(BaseModel):
+    src_id: str
+    dst_id: str
+    edge_type: str
+
+
+class CodeEntitySummary(BaseModel):
+    id: str
+    kind: str
+    name: str
+    path: str
+    signature: str | None = None
+    llm_summary: str | None = None
+    line_start: int | None = None
+
+
+class CodeEntityDetail(BaseModel):
+    id: str
+    kind: str
+    name: str
+    path: str
+    signature: str | None = None
+    docstring: str | None = None
+    code_snippet: str | None = None
+    llm_summary: str | None = None
+    llm_why: str | None = None
+    introduced_sha: str | None = None
+    line_start: int | None = None
+    line_end: int | None = None
+    edges: list[EntityEdge] = []
+
+
 class KnowledgeGraphResponse(BaseModel):
     nodes: list[KnowledgeNode]
+    edges: list[EntityEdge] = []
 
 
 class ReportSection(BaseModel):

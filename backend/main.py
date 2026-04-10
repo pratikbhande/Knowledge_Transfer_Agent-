@@ -1,5 +1,7 @@
 import asyncio
 import json
+import logging
+import logging.config
 import threading
 from typing import Any
 
@@ -12,13 +14,41 @@ import db
 import git_ingest
 import pipeline
 from git_ingest import RepoAuthError
+
+# ---- Logging setup ----
+logging.config.dictConfig({
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "detailed": {
+            "format": "%(asctime)s [%(levelname)-8s] [%(name)s] %(message)s",
+            "datefmt": "%Y-%m-%d %H:%M:%S",
+        }
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "detailed",
+            "stream": "ext://sys.stdout",
+        }
+    },
+    "root": {"level": "INFO", "handlers": ["console"]},
+    "loggers": {
+        "uvicorn": {"level": "INFO"},
+        "uvicorn.access": {"level": "WARNING"},  # suppress per-request noise
+    },
+})
+
+log = logging.getLogger("cosmobase.api")
 from models import (
     ChatRequest,
+    CodeEntityDetail,
     CommitDetail,
     CommitGraphResponse,
     CommitNode,
     CreateMissionRequest,
     CreateMissionResponse,
+    EntityEdge,
     KnowledgeGraphResponse,
     KnowledgeNode,
     MissionSummary,
@@ -55,7 +85,7 @@ def _run_pipeline_bg(mission_id: str, token: str | None) -> None:
     except RepoAuthError:
         pass
     except Exception as e:
-        print(f"[main] pipeline crashed: {e}")
+        log.exception("[%s] pipeline crashed: %s", mission_id, e)
 
 
 def _spawn_pipeline(mission_id: str, token: str | None) -> None:
@@ -209,6 +239,7 @@ async def get_graph(mission_id: str) -> CommitGraphResponse:
 async def get_knowledge_graph(mission_id: str) -> KnowledgeGraphResponse:
     _ensure_mission(mission_id)
     nodes = db.get_knowledge_nodes(mission_id)
+    edges = db.get_all_entity_edges(mission_id, limit=3000)
     return KnowledgeGraphResponse(
         nodes=[
             KnowledgeNode(
@@ -221,7 +252,57 @@ async def get_knowledge_graph(mission_id: str) -> KnowledgeGraphResponse:
                 last_date=n.get("last_date"),
             )
             for n in nodes
+        ],
+        edges=[EntityEdge(**e) for e in edges],
+    )
+
+
+@app.get("/api/missions/{mission_id}/entities")
+async def list_entities(
+    mission_id: str,
+    kind: str | None = Query(None),
+    path: str | None = Query(None),
+    limit: int = Query(200, ge=1, le=1000),
+) -> dict:
+    _ensure_mission(mission_id)
+    entities = db.list_code_entities(mission_id, kind=kind, path=path, limit=limit)
+    return {
+        "entities": [
+            {
+                "id": e["id"],
+                "kind": e["kind"],
+                "name": e["name"],
+                "path": e["path"],
+                "signature": e.get("signature"),
+                "llm_summary": e.get("llm_summary"),
+                "line_start": e.get("line_start"),
+            }
+            for e in entities
         ]
+    }
+
+
+@app.get("/api/missions/{mission_id}/entities/{entity_id:path}", response_model=CodeEntityDetail)
+async def get_entity(mission_id: str, entity_id: str) -> CodeEntityDetail:
+    _ensure_mission(mission_id)
+    e = db.get_code_entity(mission_id, entity_id)
+    if not e:
+        raise HTTPException(status_code=404, detail="entity not found")
+    edges = db.get_entity_edges(mission_id, entity_id)
+    return CodeEntityDetail(
+        id=e["id"],
+        kind=e["kind"],
+        name=e["name"],
+        path=e["path"],
+        signature=e.get("signature"),
+        docstring=e.get("docstring"),
+        code_snippet=e.get("code_snippet"),
+        llm_summary=e.get("llm_summary"),
+        llm_why=e.get("llm_why"),
+        introduced_sha=e.get("introduced_sha"),
+        line_start=e.get("line_start"),
+        line_end=e.get("line_end"),
+        edges=[EntityEdge(**edge) for edge in edges],
     )
 
 
