@@ -1,7 +1,10 @@
 import json
+import logging
 
 import db
 from llm import LLMClient
+
+log = logging.getLogger("cosmobase.reporter")
 
 
 # Sections grouped into 4 batches → 4 LLM calls instead of 13 (70% cost saving)
@@ -109,7 +112,7 @@ def write_all(mission_id: str, llm: LLMClient, progress_cb=None) -> int:
                 db.save_report_section(mission_id, r["section"], r["content"], r["refs"])
                 written += 1
         except Exception as e:
-            print(f"[reporter] batch failed: {e}")
+            log.error("batch failed: %s", e)
             # Fall back: save placeholder for each section in failed batch
             for key, _ in batch:
                 db.save_report_section(

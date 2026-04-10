@@ -6,9 +6,13 @@ Analyzes top 10 most-changed files → only 2 LLM calls total.
 Writes llm_summary + llm_why back to code_entities in DB.
 """
 
+import logging
+
 import db
 import git_ingest
 from llm import LLMClient
+
+log = logging.getLogger("cosmobase.code_analyzer")
 
 _MAX_FILES = 10   # top N hot files to analyze
 _BATCH_SIZE = 5   # files per LLM call → _MAX_FILES / _BATCH_SIZE = 2 LLM calls
@@ -48,7 +52,7 @@ def run_code_analysis(mission_id: str, llm: LLMClient) -> int:
         try:
             results = llm.analyze_files_batch(batch)
         except Exception as e:
-            print(f"[code_analyzer] batch {i // _BATCH_SIZE + 1} failed: {e}")
+            log.error("batch %d failed: %s", i // _BATCH_SIZE + 1, e)
             continue
 
         for result in results:

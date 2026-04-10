@@ -1,6 +1,9 @@
+import logging
 import traceback
 import uuid
 from urllib.parse import urlparse
+
+log = logging.getLogger("cosmobase.pipeline")
 
 import clusterer
 import code_analyzer
@@ -23,6 +26,9 @@ PHASES = [
 
 def _log(mission_id: str, level: str, phase: str, msg: str) -> None:
     db.log_event(mission_id, level, phase, msg)
+    getattr(log, "warning" if level == "error" else level if hasattr(log, level) else "info")(
+        "[%s][%s] %s", mission_id, phase, msg
+    )
 
 
 def _is_private_hint(url: str) -> bool:
@@ -259,7 +265,7 @@ def run_mission(mission_id: str, github_token: str | None = None) -> None:
         raise
     except Exception as e:
         tb = traceback.format_exc()
-        print(tb)
+        log.error("[%s] pipeline error:\n%s", mission_id, tb)
         phases = db.get_phases(mission_id)
         current = next((p for p in reversed(PHASES) if p in phases), "unknown")
         db.set_phase(mission_id, current, phases.get(current, {}).get("progress", 0) or 0, error=str(e))

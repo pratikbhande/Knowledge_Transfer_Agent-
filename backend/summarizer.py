@@ -1,9 +1,12 @@
+import logging
 import re
 
 import db
 import git_ingest
 from config import HOTSPOT_KEYWORDS, HOTSPOT_PATHS, settings
 from llm import LLMClient
+
+log = logging.getLogger("cosmobase.summarizer")
 
 
 _TYPE_RE = re.compile(r"^(feat|fix|refactor|docs|test|chore|build|ci|perf|style|merge)\b", re.IGNORECASE)
@@ -102,13 +105,13 @@ def run_summarization(mission_id: str, llm: LLMClient, clone_path: str, progress
         try:
             items = llm.summarize_commits(batch)
         except Exception as e:
-            print(f"[summarizer] batch error: {e}; retrying individually")
+            log.warning("batch error: %s; retrying individually", e)
             items = []
             for single in batch:
                 try:
                     items.extend(llm.summarize_commits([single]))
                 except Exception as se:
-                    print(f"[summarizer] single failed: {se}")
+                    log.error("single commit failed: %s", se)
                     items.append(
                         {
                             "sha": single["sha"],

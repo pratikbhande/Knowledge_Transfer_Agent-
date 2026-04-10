@@ -519,7 +519,7 @@ function renderConstellations() {
   const nodes = state.knowledgeGraph?.nodes || [];
   if (!nodes.length) {
     resetGraph();
-    graphEmptyEl.textContent = "No knowledge clusters yet.";
+    graphEmptyEl.textContent = "No knowledge clusters yet. Run ingestion first.";
     return;
   }
   const { g, W, H } = _svgInit();
@@ -528,48 +528,75 @@ function renderConstellations() {
   const filterEl = document.getElementById("graphFilter");
   if (filterEl) filterEl.classList.remove("hidden");
 
+  // Filter nodes by type
+  const THEME_KINDS = new Set(["theme", "feature", "architecture", "refactor", "bugfix", "module"]);
+  const filtered = nodes.filter((n) => {
+    const k = n.kind || "theme";
+    if (!state.graphFilter.theme && THEME_KINDS.has(k)) return false;
+    if (!state.graphFilter.file && k === "file") return false;
+    if (!state.graphFilter.fn && (k === "function" || k === "method" || k === "class")) return false;
+    return true;
+  });
+
+  if (!filtered.length) {
+    resetGraph();
+    graphEmptyEl.textContent = "All node types are filtered out.";
+    return;
+  }
+
   // Build hierarchical tree: root -> kind groups -> cluster nodes
   const kindGroups = {};
-  nodes.forEach((n) => {
+  filtered.forEach((n) => {
     const k = n.kind || "theme";
-    if (!state.graphFilter.theme && (k === "theme" || k === "feature" || k === "architecture" || k === "refactor" || k === "bugfix" || k === "module")) return;
     if (!kindGroups[k]) kindGroups[k] = [];
     kindGroups[k].push(n);
   });
+
+  // Sort groups by size descending so bigger clusters appear first
+  const sortedGroups = Object.entries(kindGroups)
+    .sort((a, b) => b[1].length - a[1].length);
 
   const treeData = {
     id: "__root",
     title: "Knowledge Tree",
     kind: "root",
-    children: Object.entries(kindGroups).map(([kind, items]) => ({
+    children: sortedGroups.map(([kind, items]) => ({
       id: `__group_${kind}`,
-      title: kind.charAt(0).toUpperCase() + kind.slice(1),
+      title: kind.charAt(0).toUpperCase() + kind.slice(1) + "s",
       kind: "group",
-      children: items.map((n) => ({
-        id: n.id,
-        title: n.title || "Untitled",
-        summary: n.summary || "",
-        kind: n.kind || "theme",
-        member_shas: n.member_shas || [],
-        first_date: n.first_date,
-        last_date: n.last_date,
-        children: [],
-      })),
+      _count: items.length,
+      children: items
+        .sort((a, b) => (b.member_shas || []).length - (a.member_shas || []).length)
+        .map((n) => ({
+          id: n.id,
+          title: n.title || "Untitled",
+          summary: n.summary || "",
+          kind: n.kind || "theme",
+          member_shas: n.member_shas || [],
+          first_date: n.first_date,
+          last_date: n.last_date,
+          children: [],
+        })),
     })),
   };
 
+  // Flatten if single group
   if (treeData.children.length === 1) {
     treeData.children = treeData.children[0].children;
   }
 
   const root = d3.hierarchy(treeData);
-  const treeLayout = d3.tree().size([H - 80, W - 200]);
+
+  // Use more vertical space for bigger trees
+  const leafCount = root.leaves().length;
+  const treeH = Math.max(H - 80, leafCount * 32);
+  const treeLayout = d3.tree().size([treeH, W - 280]);
   treeLayout(root);
 
-  // Left-to-right flow
-  root.each((d) => { const tmp = d.x; d.x = d.y + 100; d.y = tmp + 40; });
+  // Left-to-right flow: swap x/y and add offsets
+  root.each((d) => { const tmp = d.x; d.x = d.y + 120; d.y = tmp + treeH / 2 - H / 2 + 40; });
 
-  // Draw curved edges
+  // Curved edge links
   g.append("g").attr("class", "tree-links").selectAll("path")
     .data(root.links()).enter().append("path")
     .attr("d", (d) => {
@@ -577,39 +604,119 @@ function renderConstellations() {
       return `M${d.source.x},${d.source.y} C${mx},${d.source.y} ${mx},${d.target.y} ${d.target.x},${d.target.y}`;
     })
     .attr("fill", "none")
-    .attr("stroke", "rgba(167, 139, 250, 0.35)")
-    .attr("stroke-width", 1.8)
-    .attr("filter", "url(#glow)");
+    .attr("stroke", (d) => {
+      const c = _kindColorRaw(d.target.data.kind);
+      return d.target.data.id.startsWith("__") ? "rgba(167,139,250,0.5)" : c;
+    })
+    .attr("stroke-width", (d) => d.target.data.id.startsWith("__group") ? 2 : 1.2)
+    .attr("stroke-opacity", 0.45)
+    .attr("stroke-dasharray", (d) => d.target.data.id.startsWith("__group") ? "none" : "none");
 
-  // Draw nodes
+  // Node groups
   const nodeG = g.append("g").attr("class", "tree-nodes").selectAll("g")
     .data(root.descendants()).enter().append("g")
+    .attr("class", (d) => `tree-node ${d.data.id.startsWith("__") ? "tree-node--group" : "tree-node--leaf"}`)
     .attr("transform", (d) => `translate(${d.x},${d.y})`)
     .style("cursor", (d) => d.data.id.startsWith("__") ? "default" : "pointer")
+    .on("mouseenter", function(_, d) {
+      if (d.data.id.startsWith("__")) return;
+      d3.select(this).select("circle")
+        .transition().duration(150)
+        .attr("r", _nodeRadius(d) + 4)
+        .attr("stroke-width", 2.5);
+    })
+    .on("mouseleave", function(_, d) {
+      if (d.data.id.startsWith("__")) return;
+      d3.select(this).select("circle")
+        .transition().duration(150)
+        .attr("r", _nodeRadius(d))
+        .attr("stroke-width", 1.8);
+    })
     .on("click", (_, d) => {
       if (!d.data.id.startsWith("__")) showClusterDetail(d.data);
     });
 
+  // Node circles
   nodeG.append("circle")
-    .attr("r", (d) => d.data.id === "__root" ? 16 : (d.data.id.startsWith("__group") ? 12 : 10 + Math.min((d.data.member_shas || []).length * 2, 10)))
+    .attr("r", _nodeRadius)
     .attr("fill", (d) => {
-      const c = _KIND_COLORS[d.data.kind] || "var(--violet)";
-      return d.data.id.startsWith("__") ? c : `color-mix(in srgb, ${c} 28%, transparent)`;
+      const c = _kindColorRaw(d.data.kind);
+      if (d.data.id === "__root") return c;
+      if (d.data.id.startsWith("__group")) return `${c}33`;
+      return `${c}22`;
     })
-    .attr("stroke", (d) => _KIND_COLORS[d.data.kind] || "var(--violet)")
-    .attr("stroke-width", (d) => d.data.id === "__root" ? 2.5 : 1.5)
+    .attr("stroke", (d) => _kindColorRaw(d.data.kind))
+    .attr("stroke-width", (d) => d.data.id === "__root" ? 2.5 : 1.8)
     .attr("filter", "url(#glow)");
 
+  // Commit count badge (for leaf nodes with members)
+  nodeG.filter((d) => !d.data.id.startsWith("__") && (d.data.member_shas || []).length > 0)
+    .append("text")
+    .attr("dy", (d) => -_nodeRadius(d) - 2)
+    .attr("text-anchor", "middle")
+    .style("font-size", "9px")
+    .style("font-family", "'JetBrains Mono', monospace")
+    .style("fill", (d) => _kindColorRaw(d.data.kind))
+    .style("pointer-events", "none")
+    .text((d) => `${(d.data.member_shas || []).length}c`);
+
+  // Node labels
   nodeG.append("text")
-    .attr("dy", (d) => d.children ? -20 : 4)
-    .attr("dx", (d) => d.children ? 0 : 18)
-    .attr("text-anchor", (d) => d.children ? "middle" : "start")
-    .attr("fill", "var(--text)")
+    .attr("dy", (d) => d.data.id.startsWith("__") ? -(_nodeRadius(d) + 6) : 4)
+    .attr("dx", (d) => d.data.id.startsWith("__") ? 0 : _nodeRadius(d) + 8)
+    .attr("text-anchor", (d) => d.data.id.startsWith("__") ? "middle" : "start")
+    .attr("fill", (d) => d.data.id === "__root" ? "var(--cyan)" : (d.data.id.startsWith("__group") ? "var(--amber)" : "var(--text)"))
     .style("font-size", (d) => d.data.id === "__root" ? "13px" : (d.data.id.startsWith("__group") ? "12px" : "11px"))
     .style("font-family", "'Inter', sans-serif")
-    .style("font-weight", (d) => d.data.id.startsWith("__") ? "600" : "400")
+    .style("font-weight", (d) => d.data.id.startsWith("__") ? "700" : "500")
     .style("pointer-events", "none")
-    .text((d) => (d.data.title || "").slice(0, 32));
+    .text((d) => {
+      const t = d.data.title || "";
+      const maxLen = d.data.id === "__root" ? 20 : (d.data.id.startsWith("__group") ? 18 : 36);
+      return t.length > maxLen ? t.slice(0, maxLen) + "…" : t;
+    });
+
+  // Summary preview under leaf node label (first sentence)
+  nodeG.filter((d) => !d.data.id.startsWith("__") && d.data.summary)
+    .append("text")
+    .attr("dy", 4 + 14)
+    .attr("dx", (d) => _nodeRadius(d) + 8)
+    .attr("text-anchor", "start")
+    .attr("fill", "var(--text-dim)")
+    .style("font-size", "9.5px")
+    .style("font-family", "'Inter', sans-serif")
+    .style("pointer-events", "none")
+    .text((d) => {
+      const s = (d.data.summary || "").split(".")[0].trim();
+      return s.length > 50 ? s.slice(0, 50) + "…" : s;
+    });
+}
+
+function _nodeRadius(d) {
+  if (!d) return 10;
+  if (d.data.id === "__root") return 18;
+  if (d.data.id.startsWith("__group")) return 13;
+  const cnt = (d.data.member_shas || []).length;
+  return 10 + Math.min(cnt * 1.5, 12);
+}
+
+// Extract raw hex/hsl color value from CSS var for D3 stroke/fill
+const _KIND_COLOR_RAW = {
+  root: "#7dd3fc",
+  group: "#fbbf24",
+  theme: "#a78bfa",
+  module: "#7dd3fc",
+  refactor: "#f472b6",
+  architecture: "#4ade80",
+  feature: "#a78bfa",
+  bugfix: "#f87171",
+  file: "#3b82f6",
+  function: "#10b981",
+  method: "#10b981",
+  class: "#0d9488",
+};
+function _kindColorRaw(kind) {
+  return _KIND_COLOR_RAW[kind] || "#a78bfa";
 }
 
 function renderHotFiles() {
@@ -733,28 +840,55 @@ function renderCommitDetail(c) {
 }
 
 function showClusterDetail(n) {
-  const memberItems = (n.member_shas || []).slice(0, 24).map((s) =>
-    `<div class="file" data-sha="${escapeHtml(s)}" style="cursor:pointer"><span class="sha">${escapeHtml(shortSha(s))}</span></div>`
-  ).join("");
+  const color = _kindColorRaw(n.kind || "theme");
+  const kindLabel = (n.kind || "theme").charAt(0).toUpperCase() + (n.kind || "theme").slice(1);
+
+  // Build commit list by looking up titles from loaded graph
+  const commitLookup = {};
+  (state.commitGraph?.commits || []).forEach((c) => { commitLookup[c.sha] = c; });
+
+  const memberItems = (n.member_shas || []).slice(0, 20).map((s) => {
+    const c = commitLookup[s];
+    const title = c ? (c.title || c.message || "").split("\n")[0].slice(0, 55) : shortSha(s);
+    const dateStr = c ? (c.date || "").slice(0, 10) : "";
+    return `<div class="cluster-commit" data-sha="${escapeHtml(s)}" style="cursor:pointer">
+      <span class="sha" style="color:${color};font-size:10px;min-width:52px">${escapeHtml(shortSha(s))}</span>
+      <span style="flex:1;font-size:11px;color:var(--text)">${escapeHtml(title)}</span>
+      ${dateStr ? `<span style="font-size:10px;color:var(--text-faint)">${escapeHtml(dateStr)}</span>` : ""}
+    </div>`;
+  }).join("");
+
+  const remaining = Math.max(0, (n.member_shas || []).length - 20);
+  const moreHtml = remaining > 0
+    ? `<div style="font-size:10px;color:var(--text-faint);padding:4px 0">…and ${remaining} more commits</div>`
+    : "";
+
+  // Timeline bar
+  const hasDateRange = n.first_date && n.last_date && n.first_date !== n.last_date;
+  const timelineHtml = hasDateRange ? `
+    <div style="margin:10px 0;padding:8px 10px;background:rgba(0,0,0,0.3);border-radius:6px;border-left:3px solid ${color}">
+      <div style="font-size:10px;color:var(--text-faint);margin-bottom:4px;letter-spacing:0.5px">TIMELINE</div>
+      <div style="display:flex;justify-content:space-between;font-size:11px">
+        <span style="color:var(--text)">${escapeHtml(fmtDate(n.first_date))}</span>
+        <span style="color:var(--text-faint)">→</span>
+        <span style="color:var(--text)">${escapeHtml(fmtDate(n.last_date))}</span>
+      </div>
+    </div>` : "";
+
   const html = `
-    <div class="meta-row">
-      <span class="label">Knowledge Cluster</span>
-      <span class="sha">${escapeHtml(n.id)}</span>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+      <div style="width:10px;height:10px;border-radius:50%;background:${color};flex-shrink:0"></div>
+      <span class="pill" style="background:${color}22;color:${color};border-color:${color}44">${escapeHtml(kindLabel)}</span>
+      <span style="font-size:10px;color:var(--text-faint)">${(n.member_shas || []).length} commits</span>
     </div>
-    <h4>${escapeHtml(n.title)}</h4>
-    <div style="margin:6px 0"><span class="pill">${escapeHtml(n.kind || "theme")}</span></div>
-    <p style="color:var(--text);line-height:1.6">${escapeHtml(n.summary || "")}</p>
-    <div class="meta-row">
-      <span class="label">Members</span>
-      <span>${(n.member_shas || []).length} commits</span>
-    </div>
-    <div class="meta-row">
-      <span class="label">Span</span>
-      <span>${escapeHtml(fmtDate(n.first_date))} → ${escapeHtml(fmtDate(n.last_date))}</span>
-    </div>
-    <div class="files" style="margin-top:14px">
-      ${memberItems}
-    </div>
+    <h4 style="margin:0 0 8px;font-size:14px;color:var(--text);line-height:1.3">${escapeHtml(n.title)}</h4>
+    <div style="font-size:12px;color:var(--text-dim);line-height:1.6;margin-bottom:10px">${escapeHtml(n.summary || "")}</div>
+    ${timelineHtml}
+    ${memberItems ? `
+      <div style="font-size:10px;color:var(--text-faint);letter-spacing:0.5px;margin:12px 0 6px">COMMITS IN THIS CLUSTER</div>
+      <div style="display:flex;flex-direction:column;gap:4px">${memberItems}</div>
+      ${moreHtml}
+    ` : ""}
   `;
   setHTML(detailsBodyEl, html);
   detailsBodyEl.querySelectorAll("[data-sha]").forEach((el) => {
@@ -837,16 +971,37 @@ async function loadReport() {
 }
 
 function renderCitations(text) {
-  // text is escaped FIRST, then we re-introduce safe span markup for known tags.
   if (!text) return "";
-  const escaped = escapeHtml(text);
-  return escaped
-    .replace(/\[sha:([a-f0-9]{6,40})\]/gi, (_m, sha) =>
-      `<span class="cite" data-sha="${sha}">${sha.slice(0, 7)}</span>`)
-    .replace(/\[file:([^\]]+)\]/gi, (_m, f) =>
-      `<span class="cite file">${f}</span>`)
-    .replace(/\[branch:([^\]]+)\]/gi, (_m, b) =>
-      `<span class="cite branch">${b}</span>`);
+  // Replace citation tags with safe placeholders before markdown parsing
+  const placeholders = [];
+  let processed = text
+    .replace(/\[sha:([a-f0-9]{6,40})\]/gi, (_m, sha) => {
+      const idx = placeholders.length;
+      placeholders.push(`<span class="cite" data-sha="${sha}">${sha.slice(0, 7)}</span>`);
+      return `CITE_PLACEHOLDER_${idx}_END`;
+    })
+    .replace(/\[file:([^\]]+)\]/gi, (_m, f) => {
+      const idx = placeholders.length;
+      placeholders.push(`<span class="cite file">${escapeHtml(f)}</span>`);
+      return `CITE_PLACEHOLDER_${idx}_END`;
+    })
+    .replace(/\[branch:([^\]]+)\]/gi, (_m, b) => {
+      const idx = placeholders.length;
+      placeholders.push(`<span class="cite branch">${escapeHtml(b)}</span>`);
+      return `CITE_PLACEHOLDER_${idx}_END`;
+    });
+  // Parse markdown
+  let html;
+  try {
+    html = marked.parse(processed, { breaks: true, gfm: true });
+  } catch {
+    html = `<p>${escapeHtml(processed)}</p>`;
+  }
+  // Restore citation spans
+  placeholders.forEach((span, idx) => {
+    html = html.replaceAll(`CITE_PLACEHOLDER_${idx}_END`, span);
+  });
+  return html;
 }
 
 function renderReport(sections) {
@@ -859,13 +1014,11 @@ function renderReport(sections) {
 
   const html = sections.map((s) => {
     const title = SECTION_TITLES[s.section] || s.section;
-    const body = renderCitations(s.content || "")
-      .replace(/\n{2,}/g, "</p><p>")
-      .replace(/\n/g, "<br>");
+    const body = renderCitations(s.content || "");
     return `
       <div class="report-section">
         <h2>${escapeHtml(title)}</h2>
-        <div class="body"><p>${body}</p></div>
+        <div class="body">${body}</div>
       </div>`;
   }).join("");
   setHTML(reportEl, html);
@@ -949,7 +1102,7 @@ async function sendChat() {
         const data = dataLines.join("\n");
         if (frameEvent === "message") {
           answer += data;
-          setHTML(asstEl, renderCitations(answer).replace(/\n/g, "<br>"));
+          setHTML(asstEl, renderCitations(answer));
           chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
         } else if (frameEvent === "citations") {
           try { citations = JSON.parse(data); } catch { }
@@ -1012,8 +1165,8 @@ if (_graphSearchInput) {
       const title = ((d.data && d.data.title) || "").toLowerCase();
       const match = q.length > 1 && title.includes(q);
       d3.select(this).select("circle")
-        .attr("stroke", match ? "var(--amber)" : (_KIND_COLORS[(d.data && d.data.kind)] || "var(--violet)"))
-        .attr("stroke-width", match ? 3.5 : ((d.data && d.data.id === "__root") ? 2.5 : 1.5));
+        .attr("stroke", match ? "#fbbf24" : _kindColorRaw(d.data && d.data.kind))
+        .attr("stroke-width", match ? 3.5 : ((d.data && d.data.id === "__root") ? 2.5 : 1.8));
     });
   });
 }

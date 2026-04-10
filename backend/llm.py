@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from typing import Iterator
 
@@ -6,6 +7,8 @@ import anthropic
 import openai
 
 from config import settings
+
+log = logging.getLogger("cosmobase.llm")
 
 
 class LLMUnavailable(RuntimeError):
@@ -203,7 +206,7 @@ class LLMClient:
                         yield text
                 return
             except Exception as e:
-                print(f"[llm] anthropic stream error: {e}")
+                log.warning("anthropic stream error: %s", e)
         if self.oai:
             try:
                 oai_msgs = [{"role": "system", "content": system}] + messages
@@ -218,7 +221,7 @@ class LLMClient:
                         yield delta
                 return
             except Exception as e:
-                print(f"[llm] openai stream error: {e}")
+                log.warning("openai stream error: %s", e)
         yield "(LLM unavailable: no API key configured.)"
 
     # ---------- internal ----------
@@ -235,7 +238,7 @@ class LLMClient:
                 )
                 return _parse_json(resp.content[0].text)
             except Exception as e:
-                print(f"[llm] anthropic json error: {e}")
+                log.warning("anthropic json error: %s", e)
         if self.oai:
             try:
                 resp = self.oai.chat.completions.create(
@@ -249,7 +252,7 @@ class LLMClient:
                 )
                 return _parse_json(resp.choices[0].message.content or "")
             except Exception as e:
-                print(f"[llm] openai json error: {e}")
+                log.warning("openai json error: %s", e)
         raise LLMUnavailable("no LLM backend available")
 
 

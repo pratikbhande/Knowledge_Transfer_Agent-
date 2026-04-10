@@ -564,7 +564,6 @@ input[type="text"]:focus, input[type="password"]:focus {
   font-size: 13px;
   line-height: 1.65;
   color: var(--text);
-  white-space: pre-wrap;
 }
 .report-section .refs {
   margin-top: 8px;
@@ -642,4 +641,89 @@ input[type="text"]:focus, input[type="password"]:focus {
 @media (max-width: 1024px) {
   .layout { grid-template-columns: 1fr; }
   .sidebar, .details { display: none; }
+}
+
+/* Cluster commit list item */
+.cluster-commit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(167,139,250,0.08);
+  transition: background 0.15s;
+}
+.cluster-commit:hover {
+  background: rgba(167,139,250,0.10);
+  border-color: rgba(167,139,250,0.25);
+}
+
+/* ---- Markdown prose (report body + chat assistant) ---- */
+.report-section .body p,
+.chat-msg.assistant p { margin: 0 0 10px; }
+
+.report-section .body h1,
+.report-section .body h2,
+.report-section .body h3,
+.chat-msg.assistant h1,
+.chat-msg.assistant h2,
+.chat-msg.assistant h3 {
+  color: var(--cyan);
+  margin: 14px 0 6px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.report-section .body h1, .chat-msg.assistant h1 { font-size: 15px; }
+.report-section .body h2, .chat-msg.assistant h2 { font-size: 14px; }
+.report-section .body h3, .chat-msg.assistant h3 { font-size: 13px; color: var(--violet); }
+
+.report-section .body ul,
+.report-section .body ol,
+.chat-msg.assistant ul,
+.chat-msg.assistant ol {
+  margin: 6px 0 10px 18px;
+  padding: 0;
+}
+.report-section .body li,
+.chat-msg.assistant li { margin-bottom: 4px; }
+
+.report-section .body code,
+.chat-msg.assistant code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  background: rgba(125, 211, 252, 0.10);
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--cyan);
+}
+.report-section .body pre,
+.chat-msg.assistant pre {
+  background: rgba(6, 7, 13, 0.8);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  margin: 10px 0;
+}
+.report-section .body pre code,
+.chat-msg.assistant pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text);
+  font-size: 12px;
+}
+.report-section .body strong,
+.chat-msg.assistant strong { color: var(--amber); font-weight: 600; }
+.report-section .body em,
+.chat-msg.assistant em { color: var(--text-dim); font-style: italic; }
+.report-section .body blockquote,
+.chat-msg.assistant blockquote {
+  border-left: 3px solid var(--violet);
+  margin: 8px 0;
+  padding: 4px 12px;
+  color: var(--text-dim);
+  font-style: italic;
 }

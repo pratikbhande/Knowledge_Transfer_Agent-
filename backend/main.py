@@ -1,5 +1,7 @@
 import asyncio
 import json
+import logging
+import logging.config
 import threading
 from typing import Any
 
@@ -12,6 +14,32 @@ import db
 import git_ingest
 import pipeline
 from git_ingest import RepoAuthError
+
+# ---- Logging setup ----
+logging.config.dictConfig({
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "detailed": {
+            "format": "%(asctime)s [%(levelname)-8s] [%(name)s] %(message)s",
+            "datefmt": "%Y-%m-%d %H:%M:%S",
+        }
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "detailed",
+            "stream": "ext://sys.stdout",
+        }
+    },
+    "root": {"level": "INFO", "handlers": ["console"]},
+    "loggers": {
+        "uvicorn": {"level": "INFO"},
+        "uvicorn.access": {"level": "WARNING"},  # suppress per-request noise
+    },
+})
+
+log = logging.getLogger("cosmobase.api")
 from models import (
     ChatRequest,
     CodeEntityDetail,
@@ -57,7 +85,7 @@ def _run_pipeline_bg(mission_id: str, token: str | None) -> None:
     except RepoAuthError:
         pass
     except Exception as e:
-        print(f"[main] pipeline crashed: {e}")
+        log.exception("[%s] pipeline crashed: %s", mission_id, e)
 
 
 def _spawn_pipeline(mission_id: str, token: str | None) -> None:

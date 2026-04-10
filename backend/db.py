@@ -144,6 +144,8 @@ def open_db(mission_id: str) -> Iterator[sqlite3.Connection]:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    # Always apply schema so new tables are available even on old missions
+    conn.executescript(SCHEMA)
     try:
         yield conn
         conn.commit()
